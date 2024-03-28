@@ -1,6 +1,9 @@
-from util import util
+from util.util import *
 
 base= "/home/ayomide/OneDrive/MARL_git/z_tester/test"
-name = util.get_file_name(base, "temp", ext=".png")
+name = get_file_name(base, "temp", ext=".png")
 
-print(name)
+info = (name, "py")
+
+test = " ".join(info)
+print(test)
