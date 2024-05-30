@@ -23,7 +23,7 @@ def stair_case(message_keys):
         start = end
         end = end + len(subsets) + 1 # 1 is added to imitate step variable
     
-    print(subsets)
+    #print(subsets)
     return subsets
 
 def decode(message_file):
