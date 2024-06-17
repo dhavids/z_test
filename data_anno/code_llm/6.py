@@ -5,8 +5,9 @@ class Answer:
         obj.answer = value
 class Universe:
     answer = Answer()
-    
+
 u = Universe()
-print(u.answer) # 42
-# The following line will cause an error:
-u.answer = 24 # maximum recursion depth exceeded
+print(u.answer) 
+
+u.answer = 24
+

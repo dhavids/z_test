@@ -1,0 +1,41 @@
+{
+    "model": "NewNetwork",
+    "layers" : [
+      {
+        "type": "Linear",
+        "input_size": 20,
+        "output_size": 200,
+        "bias": false
+      },
+      {
+        "type": "Tanh"
+      },
+      {
+        "type": "Linear",
+        "input_size": 200,
+        "output_size": 400,
+        "bias": true
+      },
+      {
+        "type": "Tanh"
+      },
+      {
+        "type": "Linear",
+        "input_size": 400,
+        "output_size": 400,
+        "bias": false
+      },
+      {
+        "type": "ReLU"
+      },   
+      {
+        "type": "Linear",
+        "input_size": 400,
+        "output_size": 1,
+        "bias": true
+      },
+      {
+        "type": "Sigmoid"
+      }    
+    ]
+  }
