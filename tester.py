@@ -1,9 +1,10 @@
 import matplotlib.pyplot as plt
-import copy
+from matplotlib.patches import Rectangle, Circle
 
 class Plotter:
 
-    def __init__(self, x_min=0, y_min=0, x_max=1920, y_max=1080, num_agents=3, log_path=None, verbose=False) -> None:
+    def __init__(self, x_min=0, y_min=0, x_max=1920, y_max=1080, num_agents=3, log_path=None, verbose=False,
+                 env_dict=None) -> None:
 
         self.num_agents = num_agents
         self.agents = [id for id in range(num_agents)]
@@ -15,17 +16,46 @@ class Plotter:
         self.key = None
         self.colors = ['r', 'g', 'b', 'c', 'y']
         self.log_path = log_path
+        self.env_dict = env_dict
         
         self.fig, self.ax = plt.subplots()
         self.ax.set_xlim(x_min, x_max)
         self.ax.set_ylim(y_min, y_max)
+        self.ax.set_aspect('equal')
         self.x_min = x_min
         self.y_min = y_min
         self.width = x_max - x_min
         self.height = y_max - y_min
         self.lines = [self.ax.plot([], [], '-', c=self.colors[i])[0] for i in self.agents]
+        
+        self.prep_fig_from_env()
         self.background = self.fig.canvas.copy_from_bbox(self.ax.bbox)
         self.init_text()
+    
+    def prep_fig_from_env(self):
+        if self.env_dict is not None:
+            soft_bound = self.env_dict.get('env_bound')
+            landmarks = self.env_dict.get('landmarks')
+            landmark_size = self.env_dict.get('landmark_size')
+            if isinstance(soft_bound, list):
+                x_lim, y_lim = soft_bound[0]
+                width = soft_bound[1][0] - x_lim
+                height = soft_bound[1][1] - y_lim
+                rect = Rectangle((x_lim, y_lim), width, height, fill=False, ls='--', lw=0.2, 
+                                 color='0', alpha=0.5)
+                self.ax.add_patch(rect)
+            else:
+                print("Invalid env boundary data")
+
+            if isinstance(landmarks, list) and isinstance(landmark_size, float):
+                for pos in landmarks:
+                    circle = Circle(pos, radius=landmark_size, color='m', alpha=0.2)
+                    self.ax.add_patch(circle)
+            else:
+                print("Invalid landmark data")
+    
+        else:
+            print("No env dict found")
 
 
     def connect(self):
@@ -39,7 +69,6 @@ class Plotter:
         self.cidkr = self.fig.canvas.mpl_connect(
             'key_release_event', self.on_key_released)
     
-
     def on_press(self, event):
         self.mouse_pressed = True
         self.info = True
@@ -55,18 +84,10 @@ class Plotter:
     def on_move(self, event):
 
         if self.mouse_pressed and self.curr_id is not None:
-            # restore background
-            self.fig.canvas.restore_region(self.background)
             # append event's data to agent lists
             self.all_x[self.curr_id].append(event.xdata)
             self.all_y[self.curr_id].append(event.ydata)
-            # update plot's data  
-            for id in self.agents:
-                self.lines[id].set_data(self.all_x[id], self.all_y[id])
-                # redraw just the points
-                self.ax.draw_artist(self.lines[id])
-            # fill in the axes rectangle
-            self.fig.canvas.blit(self.ax.bbox)
+            self.update_fig()
             self.update_text(f"Tracking...")
         
         elif self.mouse_pressed:
@@ -80,6 +101,11 @@ class Plotter:
 
         if self.key in ['m', 'M']:
             self.log_points()
+            return
+        
+        if self.key in ['b', 'B','c', 'C']:
+            clear_all = None if self.key in ['b', 'B'] else True
+            self.clear_points(clear_all)
             return
 
         try:
@@ -99,7 +125,22 @@ class Plotter:
             self.curr_id = None
             self.update_text(f"Error: Not an INT!")
     
+    def update_fig(self):
+        # restore background
+        self.fig.canvas.restore_region(self.background)
+        # update plot's data  
+        for id in self.agents:
+            self.lines[id].set_data(self.all_x[id], self.all_y[id])
+            # redraw just the points
+            self.ax.draw_artist(self.lines[id])
+        # fill in the axes rectangle
+        self.fig.canvas.blit(self.ax.bbox)
+        plt.draw()
+    
     def init_text(self):
+        """
+        TODO: Usage instruction and key mapping information
+        """
         x_pos = 0.8 * self.width + self.x_min
         y_pos = 1.02 * self.height + self.y_min
         self.id_text = self.ax.text(x_pos, y_pos, f"Curr ID: {self.curr_id}", c='0', fontsize=12)
@@ -127,8 +168,13 @@ class Plotter:
             for id in self.agents:
                 if i < len(self.all_x[id]):
                     temp = [self.all_x[id][i], self.all_y[id][i]]
+                
+                elif len(self.all_x[id]) > 0:
+                    temp = [self.all_x[id][-1], self.all_y[id][-1]]
+                
                 else:
-                    temp = padding
+                    temp = padding 
+
                 step_pos.append(temp)
             all_pos.append(step_pos)
 
@@ -143,7 +189,31 @@ class Plotter:
         print("Positions logged")
         self.update_text(f"Positions logged")
 
+    def clear_points(self, clear_all=False):
+        if self.curr_id is not None:
+            if clear_all:
+                self.all_x[self.curr_id] = []
+                self.all_y[self.curr_id] = []
+            
+            else:
+                if len(self.all_x[self.curr_id]) > 0:
+                    del self.all_x[self.curr_id][-1]
+                    del self.all_y[self.curr_id][-1]
+            
+            self.update_fig()
+        
+        else:
+            print("No agent selected")
+            self.update_text(f"Error: No agent selected")
 
-plots = Plotter(-2, -2, 2, 2)
+
+
+env_dict = {
+    "env_bound": [(-2,-2), (2,2)],
+    "landmarks": [[-1.6,1.6],[0,0.2],[1.6,-1.5]],
+    "landmark_size": 0.2
+}
+
+plots = Plotter(-3, -3, 3, 3, env_dict=env_dict)
 plots.connect()
 plt.show()
