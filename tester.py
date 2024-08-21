@@ -1,219 +1,277 @@
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle, Circle
+import torch
+import torch.nn as nn
+from torch.utils.data import Dataset, DataLoader
+import torch.optim as optim
+from util import util
+import os
+import pandas as pd
+import numpy as np
+from functools import reduce
 
-class Plotter:
 
-    def __init__(self, x_min=0, y_min=0, x_max=1920, y_max=1080, num_agents=3, log_path=None, verbose=False,
-                 env_dict=None) -> None:
+def map_angle_to_int(angle):
+    """
+    Map angles as values between 1 -4 based on X type direction
+    """
+    if (0 <= angle <= 45) or (316 <= angle <= 360):
+        return 1
+    elif 46 <= angle <= 135:
+        return 2
+    elif 136 <= angle <= 225:
+        return 3
+    elif 226 <= angle <= 315:
+        return 4
+    else:
+        raise ValueError(f"Angle {angle} out of range (0-360)")
 
-        self.num_agents = num_agents
-        self.agents = [id for id in range(num_agents)]
-        self.verbose = verbose
-        self.all_x = {id: [] for id in self.agents}
-        self.all_y = {id: [] for id in self.agents}
-        self.curr_id = None
-        self.mouse_pressed = False
-        self.key = None
-        self.colors = ['r', 'g', 'b', 'c', 'y']
-        self.log_path = log_path
-        self.env_dict = env_dict
-        
-        self.fig, self.ax = plt.subplots()
-        self.ax.set_xlim(x_min, x_max)
-        self.ax.set_ylim(y_min, y_max)
-        self.ax.set_aspect('equal')
-        self.x_min = x_min
-        self.y_min = y_min
-        self.width = x_max - x_min
-        self.height = y_max - y_min
-        self.lines = [self.ax.plot([], [], '-', c=self.colors[i])[0] for i in self.agents]
-        
-        self.prep_fig_from_env()
-        self.background = self.fig.canvas.copy_from_bbox(self.ax.bbox)
-        self.init_text()
+def get_disp_rot(curr, prev=None, offset=0, degrees=False, neg_pi=True):
+    """
+    Get the rotation angle of a body from its current and or previous position
+    Agrs:
+        curr (list, np.ndarray): current position of agent
+        prev (list, np.ndarray): previous position of agent
+        offset float: radian value to offset computed rotation
+        degrees (bool): flag to return rotation as degrees
+        neg_pi (bool): treat radians as values between -pi to pi 
     
-    def prep_fig_from_env(self):
-        if self.env_dict is not None:
-            soft_bound = self.env_dict.get('env_bound')
-            landmarks = self.env_dict.get('landmarks')
-            landmark_size = self.env_dict.get('landmark_size')
-            if isinstance(soft_bound, list):
-                x_lim, y_lim = soft_bound[0]
-                width = soft_bound[1][0] - x_lim
-                height = soft_bound[1][1] - y_lim
-                rect = Rectangle((x_lim, y_lim), width, height, fill=False, ls='--', lw=0.2, 
-                                 color='0', alpha=0.5)
-                self.ax.add_patch(rect)
-            else:
-                print("Invalid env boundary data")
-
-            if isinstance(landmarks, list) and isinstance(landmark_size, float):
-                for pos in landmarks:
-                    circle = Circle(pos, radius=landmark_size, color='m', alpha=0.2)
-                    self.ax.add_patch(circle)
-            else:
-                print("Invalid landmark data")
+    Returns:
+        rot (float): computed rotation value
+    """
+    disp = np.array(curr)
+    if prev is not None:
+        disp = np.array(curr) - np.array(prev)
     
-        else:
-            print("No env dict found")
+    rot = np.arctan2(disp[1], disp[0])
+    disp = np.linalg.norm(disp)
+    #rot = rot % (2*math.pi) if not neg_pi else rot
+    rot = rot + offset
+    if degrees:
+        return disp, radians_to_degrees(rot, neg_pi=neg_pi)
+    return disp, rot
 
-
-    def connect(self):
-        """Connect to all the events we need."""
-        self.cidpress = self.fig.canvas.mpl_connect(
-            'button_press_event', self.on_press)
-        self.cidrelease = self.fig.canvas.mpl_connect(
-            'button_release_event', self.on_release)
-        self.cidmotion = self.fig.canvas.mpl_connect(
-            'motion_notify_event', self.on_move)
-        self.cidkr = self.fig.canvas.mpl_connect(
-            'key_release_event', self.on_key_released)
+def radians_to_degrees(radians, z_axis= 1, neg_pi=True):
+    """
+    Takes in the radians value and a neg_pi value
+    We bot environment specifies radians as 0 - pi and encode direction as z-axis
+    If neg_pi is true, values are converted from -pi to pi to 0 to 2pi
+    """
+    import math
     
-    def on_press(self, event):
-        self.mouse_pressed = True
-        self.info = True
-        if self.verbose: print("Mouse pressed")
+    radians = radians*z_axis
+    radians = radians % (2*math.pi) if neg_pi else radians
+    degrees = round(math.degrees(radians))
+    degrees = degrees % 360  # Ensure degrees stay within 0-359 range
+    if degrees < 0:
+        degrees += 360  # Add 360 to negative degrees to bring them into positive range
+    
+    # Force values of 360 to 0
+    if degrees == 360: degrees = 0
+    return degrees
 
-    def on_release(self, event):
-        self.mouse_pressed = False
-        if self.verbose: print("Mouse released")
+class NextStateModelFC(nn.Module):
+    def __init__(self, input_dim, output_dim, hidden_dims=128, num_layers=3, dropout_rate=0.2, activation='relu'):
+        super(NextStateModelFC, self).__init__()
+
+        assert num_layers >= 2, 'Number of layers must be at least 2'
         
-        if self.curr_id is not None:
-            self.update_text(f"Not Tracking...")
+        self.activation = getattr(torch.nn.functional, activation)
 
-    def on_move(self, event):
+        self.input_layer = nn.Linear(input_dim, hidden_dims)
+        self.bn_input = nn.BatchNorm1d(hidden_dims)
+        self.dropout_input = nn.Dropout(dropout_rate)
 
-        if self.mouse_pressed and self.curr_id is not None:
-            # append event's data to agent lists
-            self.all_x[self.curr_id].append(event.xdata)
-            self.all_y[self.curr_id].append(event.ydata)
-            self.update_fig()
-            self.update_text(f"Tracking...")
+        self.layers = nn.ModuleList()
+        for _ in range(num_layers-2):
+            self.layers.append(nn.Linear(hidden_dims, hidden_dims))
+            self.layers.append(nn.BatchNorm1d(hidden_dims))
+            self.layers.append(nn.Dropout(dropout_rate))
+
+        self.output_layer = nn.Linear(hidden_dims, output_dim)
+
+    def forward(self, x):
+        x = self.dropout_input(self.activation(self.bn_input(self.input_layer(x))))
         
-        elif self.mouse_pressed:
-            if self.info:
-                print(f"Enter an agent ID between 0 and {self.num_agents-1} to Start")
-                self.update_text(f"Error: No agent selected")
-                self.info = False
-    
-    def on_key_released(self, event):
-        self.key = event.key
+        for i in range(0, len(self.layers), 3):
+            x = self.layers[i+2](self.activation(self.layers[i+1](self.layers[i](x))))
+        
+        next_state = self.output_layer(x)
+        return next_state
 
-        if self.key in ['m', 'M']:
-            self.log_points()
+class BaseWorld():
+    def __init__(self, dataset_path=None, env=None, ) -> None:
+        self.dataset_path = dataset_path
+        self.env = env
+        self.path = None
+
+    
+    def prepare_dataset(self,):
+        if self.dataset_path is None and self.env is None:
+            util.verbose(f"No dataset/ env specified", decorator="error")
             return
         
-        if self.key in ['b', 'B','c', 'C']:
-            clear_all = None if self.key in ['b', 'B'] else True
-            self.clear_points(clear_all)
+        if self.env is not None:
+            temp = [attr for attr in dir(util) if f"{self.env}_world" in attr]
+            self.path = getattr(util, temp[0])
+            self.path = os.path.join(self.path, "world_pos_dict.pickle")
+        self.path = self.dataset_path if self.dataset_path else self.path
+
+        if not os.path.isfile(self.path):
+            util.verbose("Dataset path not found!", decorator="error")
             return
-
-        try:
-            self.key = int(self.key)
-            if self.key in self.agents:
-                self.curr_id = self.key
-                print("Current agent is:", self.curr_id)
-                self.update_text()
-            
-            else:
-                print(f"Please enter an agent ID between 0 and {self.num_agents-1}")
-                self.curr_id = None
-                self.update_text(f"Error: Not between 0 and {self.num_agents-1}")
-
-        except Exception as e:
-            print(f"Please enter an integer")
-            self.curr_id = None
-            self.update_text(f"Error: Not an INT!")
-    
-    def update_fig(self):
-        # restore background
-        self.fig.canvas.restore_region(self.background)
-        # update plot's data  
-        for id in self.agents:
-            self.lines[id].set_data(self.all_x[id], self.all_y[id])
-            # redraw just the points
-            self.ax.draw_artist(self.lines[id])
-        # fill in the axes rectangle
-        self.fig.canvas.blit(self.ax.bbox)
-        plt.draw()
-    
-    def init_text(self):
-        """
-        TODO: Usage instruction and key mapping information
-        """
-        x_pos = 0.8 * self.width + self.x_min
-        y_pos = 1.02 * self.height + self.y_min
-        self.id_text = self.ax.text(x_pos, y_pos, f"Curr ID: {self.curr_id}", c='0', fontsize=12)
-        x_pos = 0 * self.width + self.x_min
-        self.message = self.ax.text(x_pos, y_pos, f"", c='r', fontsize=10)
-
-    def update_text(self, message=None):
-        self.id_text.set_text(f"Curr ID: {self.curr_id}")
-        color = '0' if self.curr_id is None else self.colors[self.curr_id]
-        self.id_text.set_color(color)
-        if message:
-            self.message.set_text(f"{message}")
-        else:
-            self.message.set_text(f"")
-        plt.draw()
-    
-    def log_points(self):
-        all_pos = []
-        max_step = max([len(points) for points in self.all_x.values()])
-
-        padding = [-self.width, -self.height]
-        for i in range(max_step):
-            #temp = [val if j < len(x_p) else (-self.width, -self.height) for ]
-            step_pos = []
-            for id in self.agents:
-                if i < len(self.all_x[id]):
-                    temp = [self.all_x[id][i], self.all_y[id][i]]
-                
-                elif len(self.all_x[id]) > 0:
-                    temp = [self.all_x[id][-1], self.all_y[id][-1]]
-                
-                else:
-                    temp = padding 
-
-                step_pos.append(temp)
-            all_pos.append(step_pos)
-
-        import csv
-        path = self.log_path if self.log_path else "all_pos.csv"
-
-        with open(path, 'w') as f:
-            csvwriter = csv.writer(f)
-            csvwriter.writerow([f"Agent {id}" for id in self.agents])
-            csvwriter.writerows(all_pos)
         
-        print("Positions logged")
-        self.update_text(f"Positions logged")
+        dataset = util.unpickle_file(self.path, verbose=True)
+        self.names = dataset.get("names")
+        self.points = dataset.get("points")
+        self.df = pd.DataFrame(self.points, columns=self.names)
 
-    def clear_points(self, clear_all=False):
-        if self.curr_id is not None:
-            if clear_all:
-                self.all_x[self.curr_id] = []
-                self.all_y[self.curr_id] = []
-            
-            else:
-                if len(self.all_x[self.curr_id]) > 0:
-                    del self.all_x[self.curr_id][-1]
-                    del self.all_y[self.curr_id][-1]
-            
-            self.update_fig()
+
+    def compute_actions(self):
+        pass
+
+    def preprocess_data(self,):
+        pass
+    
+    def load_dataset(self):
+        pass
+
+
+class BaseDataset(Dataset):
+    def __init__(self, df):
+        self.df = df
+
+    def __getitem__(self, idx):
+        temp = self.df.iloc[idx]
+        data = torch.tensor(temp["data"], dtype=torch.float32)
+        target = torch.tensor(temp["target"], dtype=torch.float32)
+        return data, target
+    
+    def __len__(self):
+        return len(self.df)
+
+
+class MPEWorld(BaseWorld):
+    def __init__(self, dataset_path=None, env="mpe", n_agent=3, n_landmarks=3, step=0.001, n_actions=5) -> None:
+        super().__init__(dataset_path, env)
+        self.n_agents = n_agent
+        self.n_landmarks = n_landmarks
+        self.step = step
+        self.n_actions = n_actions
+        self.angle_act_map = {}
+
+        self.prepare_dataset()
+
+    def preprocess_data(self):
+        self.datapoints = []
+        for (id, row), (nx_id, nx_row) in zip(
+            self.df.iterrows(), self.df.shift(-1).iterrows()):
+            # Exit if we are at the end of the df
+            if nx_row.isnull().values.any():
+                break
+            if row['episode'] == nx_row['episode']:
+                # Remove the episode columns
+                curr = reduce(lambda x, y: x+y, row.drop('episode').tolist())
+                next = reduce(lambda x, y: x+y, nx_row.drop('episode').tolist())
+                # Compute action
+                action_list = []
+                for i in range(self.n_agents):
+                    name = f"agents_{i}"
+                    disp, angle = get_disp_rot(nx_row[name], row[name], 
+                                         degrees=True)
+                    if disp < self.step:
+                        action_list.append(0)
+                    else:
+                        action_list.append(map_angle_to_int(angle))
+                # convert action list to one hot before adding
+                action_list = [util.one_hot_encode(act, self.n_actions)
+                               for act in action_list]
+                action_list = reduce(lambda x, y: x+y, action_list)
+                curr.extend(action_list)    # Add action to data
+                self.datapoints.append([curr, next])
         
-        else:
-            print("No agent selected")
-            self.update_text(f"Error: No agent selected")
+        self.data = pd.DataFrame(self.datapoints, 
+                                 columns=["data", "target"])
+        # TODO: Implement MPEDataset
+        self.dataset = BaseDataset(self.data)
+        aaa = self.data
+        return
+    
+
+    def load_dataset(self, test_size=0.15, val_size=0.15, batch_size=32):
+        
+        self.batch_size = batch_size
+        size = self.dataset.__len__()
+        test_amount, val_amount = int(size * test_size), int(size * val_size)
+
+        # this function will automatically randomly split your dataset but you could also implement the split yourself
+        train_set, val_set, test_set = torch.utils.data.random_split(self.dataset, [
+                    (size - (test_amount + val_amount)), 
+                    test_amount, 
+                    val_amount])
+
+        self.train_set = DataLoader(
+            train_set, batch_size=self.batch_size, shuffle=True)
+        self.val_set = DataLoader(
+            val_set, batch_size=self.batch_size, shuffle=True)
+        self.test_set = DataLoader(
+            test_set, batch_size=self.batch_size, shuffle=True)
+    
+
+    def train(self, num_epochs=50, val_epoch=20):
+
+        # Model, loss function, and optimizer
+        # Determine input dimension from the dataset
+        input_dim = self.dataset[0][0].shape[0]
+        output_dim = self.dataset[0][1].shape[0]
+
+        self.model = NextStateModelFC(input_dim=input_dim, output_dim=output_dim)
+        criterion = nn.MSELoss()
+        optimizer = optim.Adam(self.model.parameters(), lr=0.001)
+
+        for epoch in range(num_epochs):
+            self.model.train()
+            running_loss = 0.0
+            
+            for inputs, targets in self.train_set:
+                optimizer.zero_grad()
+                
+                outputs = self.model(inputs)
+                loss = criterion(outputs, targets)
+                loss.backward()
+                optimizer.step()
+                
+                running_loss += loss.item() * inputs.size(0)
+            
+            epoch_loss = running_loss / len(self.train_set.dataset)
+            if epoch%10 == 0:
+                print(f"Epoch {epoch+1}/{num_epochs}, Training Loss: {epoch_loss:.4f}")
+
+            # Evaluate on validation set
+            if epoch > 0 and epoch%val_epoch == 0:
+                val_loss = self.evaluate(self.model, self.val_set, criterion)
+                print(f"Epoch {epoch+1}/{num_epochs}, Validation Loss: {val_loss:.4f}")
+
+        # Evaluate on test set
+        test_loss = self.evaluate(self.model, self.test_set, criterion)
+        print(f"Epoch {epoch+1}/{num_epochs}, Test Loss: {test_loss:.4f}")
+
+
+    def evaluate(self, model, data_loader, criterion):
+        model.eval()
+        running_loss = 0.0
+        with torch.no_grad():
+            for inputs, targets in data_loader:
+                outputs = model(inputs)
+                print(inputs[0], targets[0], outputs[0])
+                loss = criterion(outputs, targets)
+                running_loss += loss.item() * inputs.size(0)
+        
+        epoch_loss = running_loss / len(data_loader.dataset)
+        return epoch_loss
 
 
 
-env_dict = {
-    "env_bound": [(-2,-2), (2,2)],
-    "landmarks": [[-1.6,1.6],[0,0.2],[1.6,-1.5]],
-    "landmark_size": 0.2
-}
 
-plots = Plotter(-3, -3, 3, 3, env_dict=env_dict)
-plots.connect()
-plt.show()
+world = MPEWorld()
+world.preprocess_data()
+world.load_dataset()
+world.train(num_epochs=500, val_epoch=50)
