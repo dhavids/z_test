@@ -8,15 +8,20 @@ def helper(args):
     time.sleep(10)
     print(f"Process {id} awake after {time.time() - local_start} seconds")
 
+def main():
+    # Create a pool of worker processes
+    ctx = mp.get_context('spawn')
+    start = time.time()
 
-# Create a pool of worker processes
-ctx = mp.get_context('spawn')
-start = time.time()
+    args_list = [(i, start) for i in range(3)]
+    with ctx.Pool(3) as p:
+        p.map(helper, args_list)
 
-args_list = [(i, start) for i in range(3)]
-with mp.Pool(3) as p:
-    p.map(helper, args_list)
+    end = time.time() - start
+    print(f"\nProgram ended after {end} seconds")
 
-end = time.time() - start
-print(f"\nProgram ended after {end} seconds")
+
+if __name__ == "__main__":
+    main()
+    
     
