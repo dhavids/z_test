@@ -1,28 +1,28 @@
-Process 0 sleeping 0.7915298938751221 seconds  after global start.Process 2 sleeping 0.7916772365570068 seconds  after global start.
+Process 0 sleeping 0.40790247917175293 seconds  after global start.
+Process 0 awake after 10.000255584716797 seconds
+Process 1 sleeping 0.4104735851287842 seconds  after global start.
+Process 1 awake after 10.000208377838135 seconds
+Process 2 sleeping 0.4131491184234619 seconds  after global start.
+Process 2 awake after 10.000478267669678 seconds
 
-Process 1 sleeping 0.7916789054870605 seconds  after global start.
-Process 1 awake after 10.000524520874023 secondsProcess 0 awake after 10.000694990158081 seconds
-
-Process 2 awake after 10.000599384307861 seconds
-
-Program ended after 10.804011821746826 seconds
+Program ended after 10.420576095581055 seconds
 ==============================================================================
 Running epilogue script on gold52.
 
-Submit time  : 2024-08-21T11:48:39
-Start time   : 2024-08-21T11:49:24
-End time     : 2024-08-21T11:49:44
-Elapsed time : 00:00:20 (Timelimit=2-12:00:00)
+Submit time  : 2024-08-21T11:54:00
+Start time   : 2024-08-21T11:54:12
+End time     : 2024-08-21T11:54:24
+Elapsed time : 00:00:12 (Timelimit=2-12:00:00)
 
-Job ID: 6470452
+Job ID: 6470476
 Cluster: i5
 User/Group: aoa1v22/fp
 State: COMPLETED (exit code 0)
 Nodes: 1
 Cores per node: 5
 CPU Utilized: 00:00:01
-CPU Efficiency: 1.00% of 00:01:40 core-walltime
-Job Wall-clock time: 00:00:20
+CPU Efficiency: 1.67% of 00:01:00 core-walltime
+Job Wall-clock time: 00:00:12
 Memory Utilized: 2.29 MB
 Memory Efficiency: 0.00% of 115.36 GB
 
